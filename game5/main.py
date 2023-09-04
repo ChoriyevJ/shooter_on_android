@@ -8,8 +8,10 @@ import pygame
 import os
 import random
 import csv
+import json
 pygame.init()
 mixer.init()
+
 
 # main setting
 window = pygame.display.set_mode((W, H))
@@ -17,9 +19,16 @@ pygame.display.set_caption('Shooter')
 pygame.display.set_icon(load('images/player/Idle/1.png'))
 running = True
 
+# level in database
+with open('shooter_database.json', mode='r', encoding='utf-8') as db:
+    data = json.load(db)
+
+
 # main game variables
 start_game = False
-level = 1
+play_game = False
+pause_game = False
+level = data['main']['level']
 level_complete = False
 GRAVITY = 0.5
 start_intro = False
@@ -52,6 +61,18 @@ start_img = load('images/start_btn.png').convert_alpha()
 exit_img = load('images/exit_btn.png').convert_alpha()
 restart_img = load('images/restart_btn.png').convert_alpha()
 restart_img = pygame.transform.scale(restart_img, (restart_img.get_width() * 2, restart_img.get_height() * 2))
+starting_img = load('images/staring_image.jpg').convert()
+starting_img = pygame.transform.scale(starting_img, (W, H))
+python_logo_img = load('images/python_logo_1.png').convert_alpha()
+python_logo_img = pygame.transform.scale(python_logo_img, (python_logo_img.get_width() // 6, python_logo_img.get_height() // 6))
+paper_img = load('images/paper_1.png').convert_alpha()
+back_img = load('images/back_button_2.png').convert_alpha()
+back_img = pygame.transform.scale(back_img, (128, 128))
+pause_img = load('images/paused.png').convert_alpha()
+pause_img = pygame.transform.scale(pause_img, (64, 64))
+extra_play_img = load('images/play_button.png').convert_alpha()
+extra_play_img = pygame.transform.scale(extra_play_img, (128, 128))
+
 
 # Button class
 class Button:
@@ -70,7 +91,6 @@ class Button:
         window.blit(self.image, self.rect)
 
         return clicked
-
 
 # TileMap class
 class TileMap:
@@ -176,6 +196,13 @@ class Background:
             window.blit(self.images[3], ((x * width) - bg_scroll * 0.7, 200))
             window.blit(self.images[4], ((x * width) - bg_scroll * 0.9, 250))
 
+    def draw_background(self):
+        window.blit(self.images[0], (0, 0))
+        window.blit(self.images[1], (0, 50))
+        window.blit(self.images[2], (0, 100))
+        window.blit(self.images[3], (0, 200))
+        window.blit(self.images[4], (0, 250))
+
 # Solider
 class Solider(pygame.sprite.Sprite):
 
@@ -191,10 +218,8 @@ class Solider(pygame.sprite.Sprite):
 
         self.is_live = True
         self.health = 100
-        # if char_type == 'player':
-        #     self.health = 100
         self.max_health = self.health
-        self.killen_enemies = 0
+        self.coins = data['player']['all_coins']
 
         self.image_data = self.get_image_data()
         self.action = 0
@@ -212,10 +237,13 @@ class Solider(pygame.sprite.Sprite):
         self.on_air = False
         self.velocity = 0
 
-        self.ammo = 30
-        self.grenades = 5
+        self.ammo = 50
+        self.max_ammo = self.ammo
+        self.grenades = 10
+        self.max_grenades = self.grenades
         self.is_shooting = False
         self.is_grenade_throw = False
+        self.grenade_collide = False
 
         self.no_run = True
         self.no_run_dx = 0
@@ -228,10 +256,10 @@ class Solider(pygame.sprite.Sprite):
         self.jump_timer = 30
         self.jump_counter = 30
 
-        self.ai_shoot_timer = 30
+        self.ai_shoot_timer = data['enemy']['shoot_timer']
         self.ai_shoot_counter = self.ai_shoot_timer
 
-        self.ai_vision = pygame.Rect(0, 0, 400, 20)
+        self.ai_vision = pygame.Rect(0, 0, 400, 60)
         self.ai_shooting = False
         self.ai_killen = False
         self.kill_timer = 50
@@ -387,7 +415,7 @@ class Solider(pygame.sprite.Sprite):
             if pygame.sprite.spritecollide(self, water_group, False):
                 self.health = 0
 
-            if self.rect.y + dy >= H - TILE_SIZE:
+            if self.rect.y + dy >= H - 2 * TILE_SIZE:
                 self.health = 0
 
             if pygame.sprite.spritecollide(self, exit_group, False):
@@ -427,7 +455,6 @@ class Solider(pygame.sprite.Sprite):
             if self.jump_counter < self.jump_timer:
                 self.jump_counter += 1
             self.ai_vision.center = (self.rect.centerx + self.direction * 200, self.rect.centery)
-
             if player.rect.colliderect(self.ai_vision) and player.is_live:
                 self.action = 0
                 self.move_right = self.move_left = False
@@ -455,7 +482,6 @@ class Solider(pygame.sprite.Sprite):
                             self.move_right = True
                             self.direction = 1
                             self.ai_last_move = 'right'
-
                     else:
                         self.action = 0
                         self.move_left = self.move_right = False
@@ -504,7 +530,7 @@ class Bullet(pygame.sprite.Sprite):
         self.kwargs = kwargs
         self.image = self.get_image()
         self.rect = self.image.get_rect(topleft=(x, y))
-        self.speed = 12
+        self.speed = 13
         self.direction = direction
 
 
@@ -603,6 +629,9 @@ class Grenade(pygame.sprite.Sprite):
             self.counter += 1
             if self.counter == self.timer:
                 self.kill()
+                player.grenade_collide = False
+                for enemy in enemy_group:
+                    enemy.grenade_collide = False
                 exp = Explosion(self.rect.x - TILE_SIZE, self.rect.y - TILE_SIZE)
                 explosion_group.add(exp)
                 grenade_sound.play()
@@ -651,21 +680,22 @@ class Explosion(pygame.sprite.Sprite):
 
     def kill_characters(self):
 
-        if pygame.sprite.spritecollide(player, explosion_group, False) and self.is_not_kill:
+        if pygame.sprite.spritecollide(player, explosion_group, False) and not player.grenade_collide:
+            player.grenade_collide = True
             if player.is_live:
-                player.health -= 50
+                player.health -= 30
                 if player.health <= 0:
                     player.is_live = False
-                self.is_not_kill = False
+
 
 
         for enemy in enemy_group:
-            if enemy.rect.colliderect(self.rect) and self.is_not_kill:
+            if enemy.rect.colliderect(self.rect) and not enemy.grenade_collide:
+                enemy.grenade_collide = True
                 if enemy.is_live:
                     enemy.health -= 50
                     if enemy.health <= 0:
                         enemy.is_live = False
-                self.is_not_kill = False
 
 # HealthBox class
 class HealthBox(pygame.sprite.Sprite):
@@ -674,7 +704,6 @@ class HealthBox(pygame.sprite.Sprite):
         pygame.sprite.Sprite.__init__(self)
         self.image = self.get_image()
         self.rect = self.image.get_rect(topleft=(x, y))
-
 
     def get_image(self):
         image = load('images/icons/health_box.png').convert_alpha()
@@ -685,9 +714,8 @@ class HealthBox(pygame.sprite.Sprite):
         window.blit(self.image, self.rect)
 
     def update(self):
-
-        if pygame.sprite.spritecollide(player, health_box_group, False):
-            player.health += 40
+        if self.rect.colliderect(player.rect):
+            player.health += 10
             if player.health >= 100:
                 player.health = player.max_health
             self.kill()
@@ -702,7 +730,6 @@ class AmmoBox(pygame.sprite.Sprite):
         self.image = self.get_image()
         self.rect = self.image.get_rect(topleft=(x, y))
 
-
     def get_image(self):
         image = load('images/icons/ammo_box.png').convert_alpha()
         image = pygame.transform.scale(image, (TILE_SIZE, TILE_SIZE))
@@ -712,11 +739,13 @@ class AmmoBox(pygame.sprite.Sprite):
         window.blit(self.image, self.rect)
 
     def update(self):
-        if pygame.sprite.spritecollide(player, ammo_box_group, False):
+
+        if self.rect.colliderect(player.rect):
             player.ammo += 10
-            if player.ammo >= 20:
-                player.ammo = 20
+            if player.ammo >= player.max_ammo:
+                player.ammo = player.max_ammo
             self.kill()
+
         self.rect.x += screen_scroll
 
 # GrenadeBox class
@@ -736,10 +765,10 @@ class GrenadeBox(pygame.sprite.Sprite):
         window.blit(self.image, self.rect)
 
     def update(self):
-        if pygame.sprite.spritecollide(player, grenade_box_group, False):
-            player.grenades += 3
-            if player.grenades >= 5:
-                player.grenades = 5
+        if self.rect.colliderect(player.rect):
+            player.grenades += 5
+            if player.grenades >= player.max_grenades:
+                player.grenades = player.max_grenades
             self.kill()
         self.rect.x += screen_scroll
 
@@ -786,18 +815,70 @@ class Exit(pygame.sprite.Sprite):
 # writer class
 class Writer:
     def __init__(self):
-        self.font = pygame.font.SysFont('Futura', 30)
+        self.size = 30
+        self.font_family = 'consolas'
+        self.font = pygame.font.SysFont(self.font_family, self.size)
 
-    def write_image(self, text, x, y, margin_x, margin_y, img, count):
+    def write_ammo_or_grenades(self, text, image, quantity, x, y, margin_x, margin_y, colour: tuple):
+        render_text = self.font.render(f'{text}: ', 1, colour)
+        window.blit(render_text, (x, y))
 
-        f_text = self.font.render(f"{text}: ", 1, 'black')
-        window.blit(f_text, (x, y))
-        for i in range(count):
-            window.blit(img, (x + margin_x + img.get_rect().width * i, y + margin_y))
+        x = x + render_text.get_width()
 
-    def write_text(self, text, value, x, y):
-        f_text = self.font.render(f'{text}: {value}', 1, 'black')
-        window.blit(f_text, (x, y))
+        for i in range(quantity):
+            window.blit(image, (x + i * (image.get_width() + margin_x), y + margin_y))
+
+    def write_(self, text, image, quantity, x, y, colour: tuple):
+        text = self.font.render(f'{text}: {quantity}x', 1, colour)
+        window.blit(text, (x, y))
+        image = pygame.transform.scale(image, (24, 24))
+        window.blit(image, (x + text.get_width(), y))
+
+    def write_level(self, level, x, y, colour: tuple):
+        text = self.font.render(f'Level: {level}', 1, colour)
+        window.blit(text, (x, y))
+
+class PlayButton:
+
+    def __init__(self, x, y):
+        self.images = self.get_images()
+        self.frame_index = 0
+        self.image = self.images[self.frame_index]
+        self.rect = self.image.get_rect(topleft=(x, y))
+        self.clicked = False
+
+    def get_images(self):
+        image = load('images/play_btn_img.png').convert_alpha()
+        images = [
+            pygame.transform.scale(image, (148, 148)),
+            pygame.transform.scale(image, (152, 152)),
+            pygame.transform.scale(image, (156, 156)),
+            pygame.transform.scale(image, (160, 160)),
+            pygame.transform.scale(image, (164, 164)),
+        ]
+        return images
+
+    def animation(self, anim_speed=5):
+        if self.frame_index // anim_speed > len(self.images) - 1:
+            self.frame_index = 0
+            self.images.reverse()
+
+        self.image = self.images[self.frame_index // anim_speed]
+        self.frame_index += 1
+
+    def update(self):
+        self.animation()
+
+    def draw(self):
+        clicked = False
+        if self.rect.x < mouse_pos()[0] < self.rect.x + self.rect.width and \
+                self.rect.y < mouse_pos()[1] < self.rect.y + self.rect.height:
+            if mouse_buttons()[0] == 1:
+                clicked = True
+
+        window.blit(self.image, self.rect)
+
+        return clicked
 
 class FadeScreen:
 
@@ -810,20 +891,75 @@ class FadeScreen:
     def fade(self):
         fade_complete = False
         self.fade_counter += self.speed
+
+        surf = pygame.Surface((W, H))
         if self.direction == 1:
-            pygame.draw.rect(window, self.color, (0, 0, W, 0 + self.fade_counter))
-        elif self.direction == 2:
+            pygame.draw.rect(surf, self.color, (0, 0, W, 0 + self.fade_counter))
+            surf.set_alpha(200)
+            window.blit(surf, (0, 0))
+
+        if self.direction == 2:
             pygame.draw.rect(window, self.color, (0 - self.fade_counter, 0, W // 2, H))
             pygame.draw.rect(window, self.color, (W // 2 + self.fade_counter, 0, W // 2, H))
             pygame.draw.rect(window, self.color, (0, 0 - self.fade_counter, W, H // 2))
             pygame.draw.rect(window, self.color, (0, H // 2 + self.fade_counter, W, H // 2))
-
-        if self.fade_counter == H:
+        if self.fade_counter >= H:
             self.speed = 0
             fade_complete = True
 
-
         return fade_complete
+
+    def fade_pause_screen(self):
+
+        fade_complete = False
+        self.fade_counter += self.speed
+        surf = pygame.Surface((W // 2, H // 2))
+        pygame.draw.rect(surf, self.color, (0, 0, W // 2, 0 + self.fade_counter))
+        surf.set_alpha(40)
+        window.blit(surf, (W // 4, H // 4))
+        if self.fade_counter >= H // 2:
+            self.speed = 0
+            fade_complete = True
+        return fade_complete
+
+class Coin(pygame.sprite.Sprite):
+    def __init__(self, x, y):
+        pygame.sprite.Sprite.__init__(self)
+        self.images = self.get_images()
+        self.frame_index = 0
+        self.image = self.images[self.frame_index]
+        self.rect = self.image.get_rect(topleft=(x, y))
+
+    def get_images(self):
+        image = load('images/icons/coin.png').convert_alpha()
+        images = [
+            pygame.transform.scale(image, (24, 24)),
+            pygame.transform.scale(image, (25, 25)),
+            pygame.transform.scale(image, (26, 26)),
+            pygame.transform.scale(image, (27, 27)),
+        ]
+        return images
+
+    def animation(self, anim_speed=5):
+        if self.frame_index // anim_speed > len(self.images) - 1:
+            self.frame_index = 0
+            self.images.reverse()
+
+        self.image = self.images[self.frame_index // anim_speed]
+        self.frame_index += 1
+
+    def draw(self):
+        window.blit(self.image, self.rect)
+
+    def update(self):
+        self.animation()
+        self.rect.x += screen_scroll
+
+        if self.rect.colliderect(player.rect):
+            player.coins += 10
+            data['player']['coins_in_level'] = player.coins
+            self.kill()
+
 
 def restart_game():
     enemy_group.empty()
@@ -836,7 +972,7 @@ def restart_game():
     water_group.empty()
     decoration_group.empty()
     exit_group.empty()
-
+    coin_group.empty()
     tile_map = TileMap()
 
     return tile_map
@@ -852,6 +988,7 @@ grenade_box_group = pygame.sprite.Group()
 water_group = pygame.sprite.Group()
 decoration_group = pygame.sprite.Group()
 exit_group = pygame.sprite.Group()
+coin_group = pygame.sprite.Group()
 
 # ...
 bg = Background()
@@ -861,13 +998,20 @@ tile_map = TileMap()
 player = tile_map.process_data()
 writer = Writer()
 
-start_btn = Button(start_img, W // 2 - start_img.get_width() // 2, H // 2 - 2 *start_img.get_height())
-exit_btn = Button(exit_img, W // 2 - exit_img.get_width() // 2, H // 2 + exit_img.get_height() // 1 - start_img.get_height())
+start_btn = Button(start_img, W // 2 - start_img.get_width() // 2, H // 2 - 2 * start_img.get_height() + 80)
+exit_btn = Button(exit_img, W // 2 - exit_img.get_width() // 2,
+                  H // 2 + exit_img.get_height() // 1 - start_img.get_height() + 50)
 restart_btn = Button(restart_img, (W - restart_img.get_width()) // 2, (H - restart_img.get_height()) // 2)
-
+play_btn = PlayButton(W - 130 - 74, H - 80 - 74)
+pause_btn = Button(pause_img, W - 20 - pause_img.get_width(), 20)
+back_btn = Button(back_img, W // 2 - back_img.get_width() // 2 - 70,
+                  H // 2 - back_img.get_height() // 2)
+back_btn_2 = Button(back_img, 15, H - back_img.get_height() - 15)
+extra_play_btn = Button(extra_play_img, W // 2 - extra_play_img.get_width() // 2 + 70, H // 2 - extra_play_img.get_height() // 2)
 # fade
 restart_fade = FadeScreen(1, RED)
 start_fade = FadeScreen(2, 'black')
+pause_fade = FadeScreen(0, 'white')
 
 while running:
 
@@ -877,7 +1021,8 @@ while running:
 
     # background
     if not start_game:
-        window.fill(GREEN)
+        window.blit(starting_img, (0, 0))
+        window.blit(python_logo_img, (1100, 20))
         if start_btn.draw():
             start_game = True
             start_intro = True
@@ -885,111 +1030,213 @@ while running:
         if exit_btn.draw():
             running = False
     else:
-        bg.draw_bg(bg_scroll)
-        # player
-        player.draw()
-        player.update()
 
-        # enemies
-        for enemy in enemy_group:
-            enemy.draw()
-            enemy.update()
-            if not enemy.is_live:
-                if not enemy.ai_killen:
-                    enemy.ai_killen = True
-                    player.killen_enemies += 1
-                enemy.kill_counter += 1
-                if enemy.kill_counter == enemy.kill_timer:
-                    enemy.kill()
+        if not play_game:
+            window.blit(starting_img, (0, 0))
+            if start_intro:
 
+                if start_fade.fade():
+                    start_intro = False
+                    start_fade.fade_counter = 0
+                    start_fade.speed = 2
+            else:
+                if play_btn.draw():
+                    play_game = True
+                    start_intro = True
+                play_btn.update()
 
-        # Tile Map
-        tile_map.draw()
-
-        # bullets
-        for bullet in bullet_group:
-            bullet.draw()
-            bullet.update()
-
-        # grenades
-        for grenade in grenade_group:
-            grenade.draw()
-            grenade.update()
-
-        # explosion
-        for exp in explosion_group:
-            exp.draw()
-            exp.update()
-
-        # health box
-        for health in health_box_group:
-            health.draw()
-            health.update()
-
-        # ammo box
-        for ammo in ammo_box_group:
-            ammo.draw()
-            ammo.update()
-
-        # grenade box
-        for grenade_box in grenade_box_group:
-            grenade_box.draw()
-            grenade_box.update()
-
-        # water
-        for water in water_group:
-            water.draw()
-            water.update()
-
-        # decoration
-        for decor in decoration_group:
-            if decor.tile_name != 'box':
-                decor.draw()
-                decor.update()
-
-        # exit
-        for exit_box in exit_group:
-            exit_box.draw()
-            exit_box.update()
-
-        if start_intro:
-            if start_fade.fade():
-                start_intro = False
-                start_fade.fade_counter = 0
-                start_fade.speed = 5
-
-        screen_scroll, level_complete = player.move()
-        if player.is_live:
-
-            writer.write_image('Ammo', 10, 50, 80, 5, bullet_img, player.ammo)
-            writer.write_image('Grenades', 10, 80, 110, 3, grenade_img, player.grenades)
-            writer.write_text('Killen enemies', player.killen_enemies,10, 110)
-
-            if level_complete:
-                start_intro = True
-                screen_scroll = 0
-                bg_scroll = 0
-                level += 1
-                if level > len(os.listdir('levels')):
-                    level = 1
+                if back_btn_2.draw():
                     start_game = False
-                tile_map = restart_game()
-                player = tile_map.process_data()
+                    start_intro = True
 
         else:
-            screen_scroll = 0
-            if restart_fade.fade():
-                if restart_btn.draw():
-                    restart_fade.fade_counter = 0
-                    restart_fade.speed = 5
+
+            bg.draw_bg(bg_scroll)
+            # player
+            player.draw()
+            # Tile Map
+            tile_map.draw()
+            # enemy draw
+            enemy_group.draw(window)
+
+            # bullet draw
+            bullet_group.draw(window)
+
+            # grenades draw
+            grenade_group.draw(window)
+
+            # explosion draw
+            explosion_group.draw(window)
+
+            # health box
+            health_box_group.draw(window)
+
+            # ammo box
+            ammo_box_group.draw(window)
+
+            # grenade box
+            grenade_box_group.draw(window)
+
+            # water
+            water_group.draw(window)
+
+            # decoration
+            decoration_group.draw(window)
+
+            # exit
+            exit_group.draw(window)
+
+            # coin
+            coin_group.draw(window)
+
+
+
+            if not pause_game:
+                pause_fade.speed = 3
+                pause_fade.fade_counter = 0
+                player.update()
+
+                # enemies
+                for enemy in enemy_group:
+                    # enemy.draw()
+                    enemy.update()
+                    print(f'shoot timer: {enemy.ai_shoot_timer}')
+
+                    if not enemy.is_live:
+                        if not enemy.ai_killen:
+                            enemy.ai_killen = True
+                            coin = Coin(enemy.rect.x, enemy.rect.y)
+                            coin_group.add(coin)
+                        enemy.kill_counter += 1
+                        if enemy.kill_counter == enemy.kill_timer:
+                            enemy.kill()
+
+                # bullets
+                for bullet in bullet_group:
+                    # bullet.draw()
+                    bullet.update()
+
+                # grenades
+                for grenade in grenade_group:
+                    # grenade.draw()
+                    grenade.update()
+
+
+                # explosion
+                for exp in explosion_group:
+                    # exp.draw()
+                    exp.update()
+
+                # health box
+                for health in health_box_group:
+                    # health.draw()
+                    health.update()
+
+                # ammo box
+                for ammo in ammo_box_group:
+                    # ammo.draw()
+                    ammo.update()
+
+                # grenade box
+                for grenade_box in grenade_box_group:
+                    # grenade_box.draw()
+                    grenade_box.update()
+
+                # water
+                for water in water_group:
+                    # water.draw()
+                    water.update()
+
+                # decoration
+                for decor in decoration_group:
+                    if decor.tile_name != 'box':
+                        # decor.draw()
+                        decor.update()
+
+                # exit
+                for exit_box in exit_group:
+                    # exit_box.draw()
+                    exit_box.update()
+
+                for coin in coin_group:
+                    coin.update()
+
+                if start_intro:
+                    if start_fade.fade():
+                        start_intro = False
+                        start_fade.fade_counter = 0
+                        start_fade.speed = 5
+
+                screen_scroll, level_complete = player.move()
+
+            else:
+                if pause_fade.fade_pause_screen():
+                    if back_btn.draw():
+                        play_game = False
+                        tile_map = restart_game()
+                        player = tile_map.process_data()
+                        pause_game = False
+                    if extra_play_btn.draw():
+                        pause_game = False
+
+            if player.is_live:
+
+                if pause_btn.draw():
+                    pause_game = True
+
+
+
+                writer.write_ammo_or_grenades(text='Ammo', image=bullet_img,
+                                              quantity=player.ammo, x=10, y=50, margin_x=2, margin_y=10, colour=(0, 0, 0))
+                writer.write_ammo_or_grenades(text='Grenades', image=grenade_img,
+                                              quantity=player.grenades, x=10, y=80, margin_x=2, margin_y=8, colour=(0, 0, 0))
+                writer.write_level(level, 10, 110, colour=(0, 0, 0))
+
+                writer.write_(text='Coins', image=load('images/icons/coin.png'), quantity=player.coins, x=W // 2, y=10, colour=(0, 0, 0))
+
+                if level_complete:
                     start_intro = True
-                    tile_map = restart_game()
+                    screen_scroll = 0
                     bg_scroll = 0
+                    data['player']['all_coins'] = data['player']['coins_in_level']
+                    data['player']['coins_in_level'] = 0
+                    data['main']['level'] += 1
+                    data['enemy']['shoot_timer'] -= 1
+                    level = data['main']['level']
+                    with open('shooter_database.json', 'w', encoding='utf-8') as db:
+                        json.dump(data, db, indent=4, ensure_ascii=False)
+
+                    if data['main']['level'] > len(os.listdir('levels')):
+                        data['main']['level'] = 1
+                        level = data['main']['level']
+                        play_game = False
+                        with open('shooter_database.json', 'w', encoding='utf-8') as db:
+                            json.dump(data, db, indent=4, ensure_ascii=False)
+                    tile_map = restart_game()
                     player = tile_map.process_data()
+                    player.coins = data['player']['all_coins']
+                    for enemy in enemy_group:
+                        enemy.ai_shoot_timer = data['enemy']['shoot_timer']
 
+            else:
+                screen_scroll = 0
+                if restart_fade.fade():
+                    if restart_btn.draw():
+                        restart_fade.fade_counter = 0
+                        restart_fade.speed = 2
+                        start_intro = True
+                        tile_map = restart_game()
+                        bg_scroll = 0
+                        player = tile_map.process_data()
+                        player.coins = data['player']['all_coins']
 
-        bg_scroll -= screen_scroll
+            bg_scroll -= screen_scroll
 
+            if start_intro:
+                if start_fade.fade():
+                    start_intro = False
+                    start_fade.fade_counter = 0
+                    start_fade.speed = 2
 
     # event loop
     for event in pygame.event.get():
@@ -1008,7 +1255,3 @@ while running:
 
 
 pygame.quit()
-
-
-
-
